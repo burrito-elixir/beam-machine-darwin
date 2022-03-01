@@ -14,6 +14,39 @@ on:
         required: true
 
 jobs:
+  ensure_release:
+    runs-on: ubuntu-18.04
+    name: "Ensure release (${{ github.event.inputs.erlang_version }})"
+    steps:
+      - run: gh api -XHEAD repos/erlang/otp/releases/tags/OTP-${{ github.event.inputs.erlang_version }}
+        name: Check erlang/otp
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: check-release
+        name: Check doawoo/beam-machine 
+        run: |
+          if gh api -XHEAD repos/burrito-elixir/beam-machine-darwin/releases/tags/OTP-${{ github.event.inputs.erlang_version }}; then 
+            echo ::set-output name=exists::$(echo true)
+          else
+            echo ::set-output name=exists::$(echo false)
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          owner: burrito-elixir
+          repo: beam-machine-darwin
+          commitish: main
+          tag_name: OTP-${{ github.event.inputs.erlang_version }}
+          prerelease: ${{ contains(github.event.inputs.erlang_version, 'rc') }}
+        if: ${{ steps.check-release.outputs.exists == 'false' }}
+
   build-macos-aarch64:
     runs-on: macos-latest
     steps:
