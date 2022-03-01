@@ -1,0 +1,39 @@
+on: 
+  workflow_dispatch:
+    inputs:
+      ncurses_version:
+        description: 'The version of Ncurses to bake in'
+        default: "6.3"
+        required: true
+      openssl_version:
+        description: 'The version of OpenSSL to bake in'
+        default: "1.1.1m"
+        required: true
+      erlang_version:
+        description: 'The Erlang version to build'
+        required: true
+
+jobs:
+  build-macos-aarch64:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build Erlang (aarch64)
+      run: brew install elixir
+    - run: ./mkerlang.exs --arch=aarch64 --erlang-version="${{ github.event.inputs.erlang_version }}" --openssl-version="${{ github.event.inputs.openssl_version }}" --ncurses-version="${{ github.event.inputs.ncurses_version }}"
+    - run: gh release upload -R burrito-elixir/beam-machine-darwin OTP-${{ github.event.inputs.erlang_version }} ./*.tar.gz
+      name: Upload Base Archive
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos-x86_64:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build Erlang (x86_64)
+      run: brew install elixir
+    - run: ./mkerlang.exs --arch=x86_64 --erlang-version="${{ github.event.inputs.erlang_version }}" --openssl-version="${{ github.event.inputs.openssl_version }}" --ncurses-version="${{ github.event.inputs.ncurses_version }}"
+    - run: gh release upload -R burrito-elixir/beam-machine-darwin OTP-${{ github.event.inputs.erlang_version }} ./*.tar.gz
+      name: Upload Base Archive
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
