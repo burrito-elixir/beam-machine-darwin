@@ -24,7 +24,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - id: check-release
-        name: Check doawoo/beam-machine 
+        name: Check burrito-elixir/beam-machine-darwin 
         run: |
           if gh api -XHEAD repos/burrito-elixir/beam-machine-darwin/releases/tags/OTP-${{ github.event.inputs.erlang_version }}; then 
             echo ::set-output name=exists::$(echo true)
@@ -52,8 +52,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build Erlang (aarch64)
-      run: brew install elixir
-    - run: ./mkerlang.exs --arch=aarch64 --erlang-version="${{ github.event.inputs.erlang_version }}" --openssl-version="${{ github.event.inputs.openssl_version }}" --ncurses-version="${{ github.event.inputs.ncurses_version }}"
+      run: brew install elixir && elixir ./mkerlang.exs --arch=aarch64 --otp-version="${{ github.event.inputs.erlang_version }}" --openssl-version="${{ github.event.inputs.openssl_version }}" --ncurses-version="${{ github.event.inputs.ncurses_version }}"
     - run: gh release upload -R burrito-elixir/beam-machine-darwin OTP-${{ github.event.inputs.erlang_version }} ./*.tar.gz
       name: Upload Base Archive
       env:
@@ -64,8 +63,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build Erlang (x86_64)
-      run: brew install elixir
-    - run: ./mkerlang.exs --arch=x86_64 --erlang-version="${{ github.event.inputs.erlang_version }}" --openssl-version="${{ github.event.inputs.openssl_version }}" --ncurses-version="${{ github.event.inputs.ncurses_version }}"
+      run: brew install elixir && elixir ./mkerlang.exs --arch=x86_64 --otp-version="${{ github.event.inputs.erlang_version }}" --openssl-version="${{ github.event.inputs.openssl_version }}" --ncurses-version="${{ github.event.inputs.ncurses_version }}"
     - run: gh release upload -R burrito-elixir/beam-machine-darwin OTP-${{ github.event.inputs.erlang_version }} ./*.tar.gz
       name: Upload Base Archive
       env:
