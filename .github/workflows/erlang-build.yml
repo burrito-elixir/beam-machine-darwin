@@ -7,7 +7,7 @@ on:
         required: true
       openssl_version:
         description: 'The version of OpenSSL to bake in'
-        default: "1.1.1m"
+        default: "1.1.1n"
         required: true
       erlang_version:
         description: 'The Erlang version to build'
