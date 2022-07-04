@@ -1,17 +1,41 @@
 #! elixir
-#### Beam Machine
-#### MacOS
-
-################################################
 
 orig_cwd = File.cwd!()
 
 temp_workdir = System.tmp_dir!() |> Path.join(:crypto.strong_rand_bytes(8) |> Base.encode16())
 File.mkdir_p!(temp_workdir)
 File.cd!(temp_workdir)
-Path.join(temp_workdir, "sysroot") |> File.mkdir!()
+
+Mix.install([{:tesla, "~> 1.4"}, {:jason, "~> 1.3"}])
+
+script_version = "0.1.0"
+default_openssl_version = "1.1.1m"
+default_ncurses_version = "6.3"
+
+usage = """
+  mkerlang v#{script_version} - build a static Erlang release tar archive (Usually for use in Burrito)
+
+  args:
+    --otp-version=[x.y.z] (The OTP version that will be built) [REQUIRED]
+    --arch=[aarch64, x86_64, riscv64] (The arch to build erlang for, defaults to the current host arch)
+    --os=[linux, darwin] (The OS Erlang is being built for)
+    --abi=[gnu, musl] (The ABI of the target system, ignored if building for MacOS)
+    --openssl-version=[x.y.z(w)] (OpenSSL version to statically link into the release, defaults to #{default_openssl_version})
+    --ncurses-version=[x.y.z] (NCurses version to statically link into the release, defaults to #{default_ncurses_version})
+"""
+
+options = [
+  otp_version: :string,
+  arch: :string,
+  os: :string,
+  abi: :string,
+  openssl_version: :string,
+  ncurses_version: :string
+]
 
 defmodule ScriptUtils do
+  @nerves_toolchain_url "https://api.github.com/repos/nerves-project/toolchains/releases/tags/v1.6.0"
+
   def get_current_cpu do
     :erlang.system_info(:system_architecture)
     |> to_string()
@@ -22,15 +46,101 @@ defmodule ScriptUtils do
 
   def get_current_os do
     case :os.type() do
-      {:win32, _} -> :windows
-      {:unix, :darwin} -> :darwin
-      {:unix, :linux} -> :linux
+      {:win32, _} -> "windows"
+      {:unix, :darwin} -> "darwin"
+      {:unix, :linux} -> "linux"
     end
+  end
+
+  def build_linux_toolchain_name(cpu, abi) do
+    "#{cpu}-nerves-linux-#{abi}"
+  end
+
+  def openssl_target(:linux, :x86_64), do: "linux-x86_64"
+  def openssl_target(:linux, :aarch64), do: "linux-aarch64"
+  def openssl_target(:linux, :riscv64), do: "linux64-riscv64"
+  def openssl_target(:linux, :mipsel), do: "linux-mips64"
+
+  def openssl_target(:drawin, :x86_64), do: "darwin64-x86_64-cc"
+  def openssl_target(:darwin, :aarch64), do: "darwin64-arm64-cc"
+
+  def ncurses_target(:linux, :x86_64), do: "x86_64-linux"
+  def ncurses_target(:linux, :aarch64), do: "aarch64-linux"
+  def ncurses_target(:linux, :riscv64), do: "riscv64-linux"
+  def ncurses_target(:linux, :mipsel), do: "linux-mips32"
+
+  def ncurses_target(:darwin, :x86_64), do: "x86_64-macos"
+  def ncurses_target(:darwin, :aarch64), do: "aarch64-macos"
+
+  def clang_target(:x86_64), do: "x86_64-apple-macos11"
+  def clang_target(:aarch64), do: "arm64-apple-macos11"
+
+  def build_compiler_env(cpu, abi, bin_path) do
+    [
+      {"CC", Path.join([bin_path, "/#{ScriptUtils.build_linux_toolchain_name(cpu, abi)}-cc"])},
+      {"CXX", Path.join([bin_path, "/#{ScriptUtils.build_linux_toolchain_name(cpu, abi)}-c++"])},
+      {"AR", Path.join([bin_path, "/#{ScriptUtils.build_linux_toolchain_name(cpu, abi)}-ar"])},
+      {"LD", Path.join([bin_path, "/#{ScriptUtils.build_linux_toolchain_name(cpu, abi)}-ld"])},
+      {"LIBTOOL",
+       Path.join([bin_path, "/#{ScriptUtils.build_linux_toolchain_name(cpu, abi)}-libtool"])},
+      {"RANLIB",
+       Path.join([bin_path, "/#{ScriptUtils.build_linux_toolchain_name(cpu, abi)}-ranlib"])},
+      {"STRIP",
+       Path.join([bin_path, "/#{ScriptUtils.build_linux_toolchain_name(cpu, abi)}-strip"])}
+    ]
+  end
+
+  def fetch_and_extract_toolchain(url) do
+    IO.puts("Downloading #{url}...")
+    "wget #{url}" |> String.to_charlist() |> :os.cmd()
+    file_name = String.split(url, "/") |> List.last()
+    [] = "tar xf #{file_name}" |> String.to_charlist() |> :os.cmd()
   end
 
   def fetch_and_extract(base_url, file_name) do
     "wget #{base_url}/#{file_name}" |> String.to_charlist() |> :os.cmd()
     [] = "tar xzf #{file_name}" |> String.to_charlist() |> :os.cmd()
+  end
+
+  def fetch_linux_toolchain(cpu, abi) do
+    resp = Tesla.get!(@nerves_toolchain_url, headers: [{"User-Agent", "ErlangBuilder"}])
+    data = Jason.decode!(resp.body)
+
+    found =
+      data["assets"]
+      |> Enum.find(fn asset ->
+        String.contains?(
+          asset["browser_download_url"],
+          "nerves_toolchain_#{cpu}_nerves_linux_#{abi}-darwin_arm"
+        )
+      end)
+
+    if found do
+      fetch_and_extract_toolchain(found["browser_download_url"])
+      files = Path.join([File.cwd!(), "/nerves_toolchain_*"]) |> Path.wildcard()
+      archive = Enum.find(files, fn s -> String.contains?(s, ".tar.xz") end)
+      directory = List.delete(files, archive) |> List.first()
+
+      File.rm!(archive)
+
+      IO.puts("Toolchain Directory: #{directory}")
+
+      name = build_linux_toolchain_name(cpu, abi)
+      bin_path = Path.join([directory, "/bin"])
+      sysroot_path = Path.join([directory, "/#{name}/sysroot"])
+      compiler_env = build_compiler_env(cpu, abi, bin_path)
+
+      IO.puts("Compiler Env: ")
+      IO.puts("#{inspect(compiler_env)}")
+
+      %{
+        bin_path: bin_path,
+        sysroot_path: sysroot_path,
+        compiler_env: compiler_env
+      }
+    else
+      raise "Cannot find a matching Nerves toolchain to download for that platform/ABI combination!"
+    end
   end
 
   def print_fatal(val) do
@@ -54,43 +164,17 @@ defmodule ScriptUtils do
 
   def arch_to_atom("x86_64"), do: :x86_64
   def arch_to_atom("aarch64"), do: :aarch64
+  def arch_to_atom("riscv64"), do: :riscv64
+  def arch_to_atom("mipsel"), do: :mipsel
   def arch_to_atom(_), do: get_current_cpu() |> arch_to_atom()
 
-  def openssl_target(:x86_64), do: "darwin64-x86_64-cc"
-  def openssl_target(:aarch64), do: "darwin64-arm64-cc"
+  def os_to_atom("linux"), do: :linux
+  def os_to_atom("darwin"), do: :darwin
+  def os_to_atom(_), do: get_current_os() |> os_to_atom()
 
-  def ncurses_target(:x86_64), do: "x86_64-macos"
-  def ncurses_target(:aarch64), do: "aarch64-macos"
-
-  def erlang_target(:x86_64), do: "x86_64-apple-darwin"
-  def erlang_target(:aarch64), do: "aarch64-apple-darwin"
-
-  def clang_target(:x86_64), do: "x86_64-apple-macos11"
-  def clang_target(:aarch64), do: "arm64-apple-macos11"
+  def abi_to_atom("gnu"), do: :gnu
+  def abi_to_atom("musl"), do: :musl
 end
-
-################################################
-
-script_version = "0.1.0"
-default_openssl_version = "1.1.1m"
-default_ncurses_version = "6.3"
-
-usage = """
-  mkerlang v#{script_version} - build a static Erlang release for MacOS (aarch64 or x86_64)
-
-  args:
-    --otp-version=[x.y.z] (The OTP version that will be built) [REQUIRED]
-    --arch=[aarch64, x86_64] (The arch to build erlang for, defualts to the current host arch)
-    --openssl-version=[x.y.z(w)] (OpenSSL version to statically link into the release, defualts to #{default_openssl_version})
-    --ncurses-version=[x.y.z] (NCurses version to statically link into the release, defualts to #{default_ncurses_version})
-"""
-
-options = [
-  otp_version: :string,
-  arch: :string,
-  openssl_version: :string,
-  ncurses_version: :string
-]
 
 required_path_commands = ["wget", "clang", "make", "autoconf", "perl", "tar"]
 
@@ -109,23 +193,36 @@ if !Keyword.has_key?(args, :otp_version) do
   ScriptUtils.print_fatal("Required parameter --otp_version was not provided!")
 end
 
+target_erlang_version = Keyword.get(args, :otp_version)
+target_openssl_version = Keyword.get(args, :openssl_version, default_openssl_version)
+target_ncurses_version = Keyword.get(args, :ncurses_version, default_ncurses_version)
+
 IO.puts("Host OS: #{ScriptUtils.get_current_os()}")
 IO.puts("Host Arch: #{ScriptUtils.get_current_cpu()}")
 IO.puts("Build Dir: #{temp_workdir}")
 IO.puts("----------")
 
-target_erlang_version = Keyword.get(args, :otp_version)
-target_openssl_version = Keyword.get(args, :openssl_version, default_openssl_version)
-target_ncurses_version = Keyword.get(args, :ncurses_version, default_ncurses_version)
-
 target_arch =
   Keyword.get(args, :arch, ScriptUtils.get_current_cpu()) |> ScriptUtils.arch_to_atom()
 
-IO.puts("Targe Arch: #{target_arch}")
+target_os = Keyword.get(args, :os, ScriptUtils.get_current_os()) |> ScriptUtils.os_to_atom()
+target_abi = Keyword.get(args, :abi, "gnu") |> ScriptUtils.abi_to_atom()
+
+IO.puts("Target Arch: #{target_arch}")
+IO.puts("Target OS: #{target_os}")
+
+if target_os == :linux do
+  IO.puts("Target ABI: #{target_abi}")
+end
+
+IO.puts("----------")
+
 IO.puts("Target Erlang Version: #{target_erlang_version}")
 IO.puts("Target OpenSSL Version: #{target_openssl_version}")
 IO.puts("Target NCurses Version: #{target_ncurses_version}")
 IO.puts("----------")
+
+#### Fetching
 
 IO.puts("-> Fetch & Extract: OpenSSL...")
 
@@ -150,41 +247,84 @@ ScriptUtils.fetch_and_extract(
 
 IO.puts("----------")
 
-target_sysroot = Path.join(temp_workdir, "sysroot")
-compiler_env = [
-  {"CC", "clang -target #{ScriptUtils.clang_target(target_arch)}"},
-  {"CXX", "clang++ -target #{ScriptUtils.clang_target(target_arch)}"}
-]
+result =
+  if target_os == :linux do
+    IO.puts("-> Fetch & Extract: Toolchain")
+    ScriptUtils.fetch_linux_toolchain(target_arch, target_abi)
+  else
+    IO.puts("-> Using Native Toolchain")
+    sysroot_path = Path.join([temp_workdir, "/sysroot"])
+
+    compiler_env = [
+      {"CC", "clang -target #{ScriptUtils.clang_target(target_arch)}"},
+      {"CXX", "clang++ -target #{ScriptUtils.clang_target(target_arch)}"}
+    ]
+
+    File.mkdir!(sysroot_path)
+
+    %{
+      sysroot_path: sysroot_path,
+      compiler_env: compiler_env
+    }
+  end
 
 IO.puts("-> Build: OpenSSL...")
 Path.join(temp_workdir, "openssl-#{target_openssl_version}") |> File.cd!()
-ScriptUtils.exec_command_in_cwd("./Configure #{ScriptUtils.openssl_target(target_arch)} no-shared --prefix=#{target_sysroot} && make -j && make install_sw", compiler_env)
+
+IO.puts(
+  "./Configure #{ScriptUtils.openssl_target(target_os, target_arch)} no-shared --prefix=#{result.sysroot_path} && make -j && make install_sw"
+)
+
+ScriptUtils.exec_command_in_cwd(
+  "./Configure #{ScriptUtils.openssl_target(target_os, target_arch)} no-shared --prefix=#{result.sysroot_path} && make -j && make install_sw",
+  result.compiler_env
+)
 
 IO.puts("-> Build: NCurses...")
 Path.join(temp_workdir, "ncurses-#{target_ncurses_version}") |> File.cd!()
-ScriptUtils.exec_command_in_cwd("./configure --host=#{ScriptUtils.ncurses_target(target_arch)} --with-normal --without-shared --prefix=#{target_sysroot} && make -j && make install", compiler_env)
 
-IO.puts("-> Build: Erlang...")
+ScriptUtils.exec_command_in_cwd(
+  "./configure --host=#{ScriptUtils.ncurses_target(target_os, target_arch)} --with-normal --without-shared --prefix=#{result.sysroot_path} && make -j && make install",
+  result.compiler_env
+)
 
-erlang_configure_flags = "--disable-parallel-configure --without-megaco --without-javac --without-jinterface --without-hipe --disable-dynamic-ssl-lib --with-ssl='#{target_sysroot}'"
+File.cd!(temp_workdir)
 
-IO.puts("--> Boostrap...")
-Path.join(temp_workdir, "otp_src_#{target_erlang_version}") |> File.cd!()
-ScriptUtils.exec_command_in_cwd("./configure --enable-bootstrap-only --without-javac --without-jinterface && make -j", [])
+if target_os == :linux do
+  IO.puts("-> Generate: XComp Config...")
 
-IO.puts("--> Final Build...")
-erlang_env = [
-  {"erl_xcomp_sysroot", target_sysroot},
-  {"CC", "clang -target #{ScriptUtils.clang_target(target_arch)}"},
-  {"CXX", "clang++ -target #{ScriptUtils.clang_target(target_arch)}"},
-  {"LDFLAGS", "-L#{target_sysroot}/lib"},
-  {"CFLAGS", "-O2 -g -L#{target_sysroot}/lib -I#{target_sysroot}/include -I#{target_sysroot}/include/ncurses"},
-  {"CXXFLAGS", "-O2 -g -L#{target_sysroot}/lib -I#{target_sysroot}/include -I#{target_sysroot}/include/ncurses"},
-]
-ScriptUtils.exec_command_in_cwd("./configure #{erlang_configure_flags} --host=#{ScriptUtils.erlang_target(target_arch)} --build=$(erts/autoconf/config.guess) && make -j", erlang_env)
+  compiled_config =
+    EEx.eval_file("#{orig_cwd}/erlang-xcomp-template.conf.eex",
+      bin_path: result.bin_path,
+      toolchain_prefix: ScriptUtils.build_linux_toolchain_name(target_arch, target_abi),
+      sysroot_path: result.sysroot_path,
+      target_arch: target_arch,
+      target_abi: target_abi,
+      target_os: target_os,
+      additional_cflags: "",
+      additional_cxxflags: ""
+    )
+
+  File.write!("erlang-xcomp-config-beam-machine.conf", compiled_config)
+
+  IO.puts("--> Boostrap Erlang...")
+  Path.join(temp_workdir, "otp_src_#{target_erlang_version}") |> File.cd!()
+
+  ScriptUtils.exec_command_in_cwd(
+    "./configure --enable-bootstrap-only --without-javac --without-jinterface && make -j",
+    []
+  )
+
+  IO.puts("--> Cross-Compile Erlang...")
+
+  ScriptUtils.exec_command_in_cwd(
+    "./otp_build configure --xcomp-conf=#{Path.join([temp_workdir, "/erlang-xcomp-config-beam-machine.conf"])} && make -j",
+    []
+  )
+end
 
 IO.puts("-> Build & Pack Release...")
-release_name = "otp_#{target_erlang_version}_macos_#{target_arch}_ssl_#{target_openssl_version}"
+release_name = "otp_#{target_erlang_version}_#{target_os}_#{target_arch}_ssl_#{target_openssl_version}"
 release_root = Path.join(orig_cwd, release_name)
 ScriptUtils.exec_command_in_cwd("make release -j", [{"RELEASE_ROOT", release_root}])
 
@@ -193,6 +333,6 @@ ScriptUtils.exec_command_in_cwd("tar czf #{release_name}.tar.gz ./#{release_name
 
 IO.puts("-> Cleaning Up")
 File.rm_rf!(temp_workdir)
-File.rm_rf!(release_root)
+File.rm_rf!("./#{release_name}/")
 
 IO.puts("-> Done!")
