@@ -24,7 +24,9 @@ done
 echo "Darwin Builds:" ${#darwin_builds[@]}
 echo "Linux Builds:" ${#linux_builds[@]}
 
-for build_path in $linux_builds do
+#### Do all linux builds
+
+for build_path in ${darwin_builds[@]}; do
     if test -f "$build_path/BUILD_OK"; then
         echo "$build_path OK [Already Built]"
     else
@@ -36,3 +38,5 @@ for build_path in $linux_builds do
         cd $orig_path
     fi
 done
+
+#### Do all MacOS builds
