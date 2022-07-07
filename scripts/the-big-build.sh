@@ -26,7 +26,8 @@ echo "Linux Builds:" ${#linux_builds[@]}
 
 #### Do all linux builds
 
-for build_path in ${darwin_builds[@]}; do
+for build_path in ${linux_builds[@]}; do
+    echo $build_path
     if test -f "$build_path/BUILD_OK"; then
         echo "$build_path OK [Already Built]"
     else
@@ -34,7 +35,7 @@ for build_path in ${darwin_builds[@]}; do
         cd $build_path
         do-build-in-dir-linux.sh > /dev/null 2>&1
         status=$?
-        [ $status -eq 0 ] && echo "$build_dir OK" || echo "$build_dir FAILED [Status: $status]"
+        [ $status -eq 0 ] && echo "$build_path OK" || echo "$build_path FAILED [Status: $status]"
         cd $orig_path
     fi
 done

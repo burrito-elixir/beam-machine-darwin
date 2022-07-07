@@ -2,7 +2,7 @@
 IFS="/" read -ra parts <<< "$(pwd)"
 len=${#parts[@]}
 cpu=${parts[$len-1]}
-erlang_version=${parts[$len-3]}
+erlang_version=${parts[$len-2]}
 erlang_version=${erlang_version/#OTP-}
 
 echo "CPU: $cpu"
