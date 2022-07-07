@@ -1,6 +1,7 @@
 #! elixir
 
 orig_cwd = File.cwd!()
+file_dir = __ENV__.file |> Path.dirname()
 
 temp_workdir = System.tmp_dir!() |> Path.join(:crypto.strong_rand_bytes(8) |> Base.encode16())
 File.mkdir_p!(temp_workdir)
@@ -149,7 +150,7 @@ defmodule ScriptUtils do
   end
 
   def exec_command_in_cwd(command, env) do
-    System.cmd(
+    {_, result} = System.cmd(
       "/bin/bash",
       [
         "-c",
@@ -160,6 +161,10 @@ defmodule ScriptUtils do
       env: env,
       stderr_to_stdout: true
     )
+
+    if result != 0 do
+      raise "Command failed! #{inspect(command)}"
+    end
   end
 
   def arch_to_atom("x86_64"), do: :x86_64
@@ -294,7 +299,7 @@ if target_os == :linux do
   IO.puts("-> Generate: XComp Config...")
 
   compiled_config =
-    EEx.eval_file("#{orig_cwd}/erlang-xcomp-template.conf.eex",
+    EEx.eval_file("#{file_dir}/erlang-xcomp-template.conf.eex",
       bin_path: result.bin_path,
       toolchain_prefix: ScriptUtils.build_linux_toolchain_name(target_arch, target_abi),
       sysroot_path: result.sysroot_path,
@@ -321,10 +326,12 @@ if target_os == :linux do
     "./otp_build configure --xcomp-conf=#{Path.join([temp_workdir, "/erlang-xcomp-config-beam-machine.conf"])} && make -j",
     []
   )
+else
+
 end
 
 IO.puts("-> Build & Pack Release...")
-release_name = "otp_#{target_erlang_version}_#{target_os}_#{target_arch}_ssl_#{target_openssl_version}"
+release_name = "otp_#{target_erlang_version}_#{target_os}_#{target_abi}_#{target_arch}_ssl_#{target_openssl_version}"
 release_root = Path.join(orig_cwd, release_name)
 ScriptUtils.exec_command_in_cwd("make release -j", [{"RELEASE_ROOT", release_root}])
 
