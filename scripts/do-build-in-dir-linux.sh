@@ -3,7 +3,7 @@ IFS="/" read -ra parts <<< "$(pwd)"
 len=${#parts[@]}
 abi=${parts[$len-1]}
 cpu=${parts[$len-2]}
-erlang_version=${parts[$len-3]}
+erlang_version=${parts[$len-4]}
 erlang_version=${erlang_version/#OTP-}
 
 echo "ABI: $abi"
